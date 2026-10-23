@@ -1,0 +1,3 @@
+- insert:
+    - id: my-remote
+      name: '@local/my-remote'

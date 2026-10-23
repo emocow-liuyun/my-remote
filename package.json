@@ -1,0 +1,30 @@
+{
+  "name": "@local/my-remote",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "自家专用远程访问：一次性配对码 + 设备会话 + 门控 /myremote 反向代理，不做中继、不走第三方。",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "bin"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "bin": {
+    "myremote-entry": "bin/fixed-entry.js"
+  }
+}
