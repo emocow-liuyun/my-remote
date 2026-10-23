@@ -1,3 +1,7 @@
+# 主机半区：门控 /myremote 通道、配对码、设备表、转发器与隧道子进程。
 - insert:
     - id: my-remote
       name: '@local/my-remote'
+    # 设置页（独立子路径）：在「设置 → 远程控制」里生成配对码、管理设备。
+    - id: my-remote-settings
+      name: '@local/my-remote/settings'

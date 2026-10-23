@@ -1,0 +1,3 @@
+- insert:
+    - id: my-remote-settings
+      name: '@local/my-remote/settings'

@@ -3,21 +3,29 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "自家专用远程访问：一次性配对码 + 设备会话 + 门控 /myremote 反向代理，不做中继、不走第三方。",
+  "description": "DSH 桌面端自建远程访问：一次性配对码 + 设备会话 + 门控 /myremote 通道，自建 Cloudflare 隧道，不做第三方中继。",
+  "license": "MIT",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./settings": "./settings/index.js",
+    "./settings/client": "./settings/client.js",
+    "./settings/locale/*.json": "./settings/locale/*.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg",
-    "./package.json": "./package.json",
-    "./client": "./lib/client.js"
+    "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "settings",
+    "bin",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "bin"
+    "README.md",
+    "LICENSE",
+    "test"
   ],
   "dsh": {
     "bundle": {
@@ -26,5 +34,18 @@
   },
   "bin": {
     "myremote-entry": "bin/fixed-entry.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "remote-access",
+    "cloudflare-tunnel"
+  ],
+  "scripts": {
+    "test": "node --test test/smoke.test.js"
   }
 }
