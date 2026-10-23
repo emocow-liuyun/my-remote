@@ -16,9 +16,11 @@ test('host 半区导出 apply 与 Config', async () => {
   assert.deepEqual(mod.inject, ['webServer'])
 })
 
-test('配对页含 8 位码输入与提交逻辑', () => {
+test('远程页含密码输入与提交逻辑', () => {
   const page = read('lib/page.js')
-  assert.match(page, /maxlength="8"/)
+  assert.match(page, /type="password"/)
+  assert.match(page, /autocomplete="current-password"/)
+  assert.doesNotMatch(page, /maxlength="8"|toUpperCase|60 秒/)
   assert.match(page, /\/myremote\/pair/)
 })
 
@@ -32,7 +34,8 @@ test('转发器不绑定 0.0.0.0', () => {
 
 test('Windows 分支存在', () => {
   assert.match(read('bin/fixed-entry.js'), /win32/)
-  assert.match(read('lib/index.js'), /cloudflared\.exe/)
+  assert.match(read('lib/runtime.js'), /cloudflared\.exe/)
+  assert.match(read('lib/index.js'), /resolveCloudflared/)
 })
 
 test('设置页走子路径并注册 settings.section', () => {

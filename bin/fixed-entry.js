@@ -17,6 +17,7 @@
 import { createServer, request as httpRequest } from 'node:http'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { gatedPath, watchParent, parseListeningPorts, probeMyRemote } from '../lib/runtime.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -36,47 +37,19 @@ async function listeningPorts() {
   try {
     if (process.platform === 'win32') {
       const { stdout } = await execFileAsync('netstat', ['-ano', '-p', 'TCP'], { timeout: 3000 })
-      const ports = new Set()
-      for (const line of stdout.split('\n')) {
-        const cols = line.trim().split(/\s+/)
-        if (cols.length < 4 || cols[3] !== 'LISTENING') continue
-        const local = cols[1]
-        const port = Number(local.slice(local.lastIndexOf(':') + 1))
-        if (!Number.isFinite(port) || port < 1024) continue
-        if (!/^(127\.0\.0\.1|\[::1\]|0\.0\.0\.0):/.test(local) && !local.startsWith('127.')) continue
-        ports.add(port)
-      }
-      return [...ports]
+      return parseListeningPorts(stdout, 'netstat')
     }
-    const { stdout } = await execFileAsync('ss', ['-lntH'], { timeout: 3000 })
-    const ports = new Set()
-    for (const line of stdout.split('\n')) {
-      const m = line.trim().match(/^LISTEN\s+\d+\s+\d+\s+(\S+):(\d+)\s/)
-      if (m === null) continue
-      const [, addr, port] = m
-      // 只认回环监听；桌面 dsh 绑的是 127.0.0.1。
-      if (!/^127\.0\.0\.1$|^\[::1\]$|^\[::ffff:127\.0\.0\.1\]$/.test(addr)) continue
-      ports.add(Number(port))
+    try {
+      const { stdout } = await execFileAsync('ss', ['-lntH'], { timeout: 3000 })
+      return parseListeningPorts(stdout)
+    } catch {
+      const { stdout } = await execFileAsync('netstat', ['-lnt'], { timeout: 3000 })
+      return parseListeningPorts(stdout, 'netstat')
     }
-    return [...ports]
-  } catch {
-    return []
-  }
+  } catch { return [] }
 }
 
-/** 判断某端口上是否是 dsh 的桌面实例：访问 / 应返回 401（需要浏览器凭据）。 */
-function probe(port) {
-  return new Promise((resolve) => {
-    const req = httpRequest({ host: HOST, port, path: '/', method: 'GET', timeout: 1500, headers: { host: `${HOST}:${port}` } }, (res) => {
-      res.resume()
-      // 桌面实例对未认证请求回 401；别的服务不会恰好如此。
-      resolve(res.statusCode === 401 || res.statusCode === 200)
-    })
-    req.on('timeout', () => { req.destroy(); resolve(false) })
-    req.on('error', () => resolve(false))
-    req.end()
-  })
-}
+const probe = probeMyRemote
 
 /** 找出当前的桌面端口；找不到返回 0。 */
 async function discover() {
@@ -111,6 +84,12 @@ function proxyHeaderList(headers) {
 }
 
 const server = createServer(async (req, res) => {
+  const path = gatedPath(req.url)
+  if (!path) { res.writeHead(400); res.end(); return }
+  if (req.url.split('?')[0] === '/') {
+    res.writeHead(302, { location: '/myremote/' + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''), 'cache-control': 'no-store' })
+    res.end(); return
+  }
   const target = await discover()
   if (target === 0) {
     res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
@@ -120,7 +99,7 @@ const server = createServer(async (req, res) => {
   // 原样管道转发，不缓冲、不改写实体，保持在请求开始瞬间解析到的端口上。
   const upstream = httpRequest(
     {
-      host: HOST, port: target, path: req.url, method: req.method,
+      host: HOST, port: target, path, method: req.method,
       headers: Object.fromEntries(proxyHeaderList({ ...req.headers, host: `${HOST}:${target}` })),
       // 长连接事件流不能被默认超时截断。
       timeout: 0,
@@ -146,17 +125,27 @@ const server = createServer(async (req, res) => {
 
 // WebSocket 升级同样需要转发，否则配对后的实时通道会断。
 server.on('upgrade', async (req, socket, head) => {
+  const path = gatedPath(req.url)
+  if (path?.split('?')[0] !== '/myremote/api/remote.mux') { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return }
   const target = await discover()
   if (target === 0) { socket.destroy(); return }
   const upstream = httpRequest({
-    host: HOST, port: target, path: req.url, method: req.method,
+    host: HOST, port: target, path, method: req.method,
     headers: { ...req.headers, host: `${HOST}:${target}` },
   })
   upstream.on('upgrade', (upRes, upSocket, upHead) => {
     socket.write(`HTTP/1.1 101 Switching Protocols\r\n${Object.entries(upRes.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n')}\r\n\r\n`)
     if (upHead.length > 0) upSocket.unshift(upHead)
     if (head.length > 0) upSocket.write(head)
+    socket.on('error', () => upSocket.destroy())
+    upSocket.on('error', () => socket.destroy())
+    socket.on('close', () => upSocket.destroy())
+    upSocket.on('close', () => socket.destroy())
     upSocket.pipe(socket).pipe(upSocket)
+  })
+  upstream.on('response', response => {
+    socket.end(`HTTP/1.1 ${response.statusCode ?? 502} Error\r\nConnection: close\r\n\r\n`)
+    response.resume()
   })
   upstream.on('error', () => socket.destroy())
   upstream.end()
@@ -166,13 +155,23 @@ server.listen(FIXED_PORT, HOST, () => {
   process.stdout.write(`my-remote 固定入口已就绪：http://${HOST}:${String(FIXED_PORT)}\n`)
 })
 
-const shutdown = () => server.close(() => process.exit(0))
+server.on('error', error => { console.error('my-remote: fixed-entry failed:', error.message); process.exit(1) })
+const sockets = new Set()
+server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)) })
+let stopping = false
+const shutdown = () => {
+  if (stopping) return
+  stopping = true
+  // close() does not close upgraded WebSockets or streaming responses.
+  // Give ordinary HTTP requests a grace period, then enforce a finite deadline.
+  const deadline = setTimeout(() => {
+    for (const socket of sockets) socket.destroy()
+    process.exit(0)
+  }, 1000)
+  server.close(() => { clearTimeout(deadline); process.exit(0) })
+}
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
-
-// 父进程（dsh）被强杀时收到不到 disposer，这里兜底：父进程消失即自行退出，
-// 避免留下一个指向已死端口的孤儿转发器。
-const parentPid = process.ppid
-setInterval(() => {
-  if (process.ppid !== parentPid) shutdown()
-}, 2_000).unref()
+process.on('message', message => { if (message === 'shutdown') shutdown() })
+process.on('disconnect', shutdown)
+watchParent(shutdown)

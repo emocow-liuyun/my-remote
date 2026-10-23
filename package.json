@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "DSH 桌面端自建远程访问：一次性配对码 + 设备会话 + 门控 /myremote 通道，自建 Cloudflare 隧道，不做第三方中继。",
+  "description": "DSH 桌面端自建远程访问：本机固定密码 + 设备会话 + 门控 /myremote 通道，自建 Cloudflare 隧道，不做第三方中继。",
   "license": "MIT",
   "main": "lib/index.js",
   "exports": {
@@ -30,6 +30,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-settings"],
+      "external": ["react"]
     }
   },
   "bin": {
@@ -46,6 +51,9 @@
     "cloudflare-tunnel"
   ],
   "scripts": {
-    "test": "node --test test/smoke.test.js"
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "3.18.5"
   }
 }

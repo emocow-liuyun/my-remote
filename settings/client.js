@@ -1,7 +1,7 @@
 /**
  * 远程控制设置页（Client 半区）。
  *
- * 在「设置」面板里加一个独立分区，可以在界面里直接生成配对码、查看已配对设备、一键吊销。
+ * 在「设置」面板里加一个独立分区，可以在界面里直接设置远程密码、查看已配对设备、一键吊销。
  * 走的是插件 Host 半区已经注册好的 /myremote/* HTTP 路由，不额外引入 Remote 端点。
  */
 window.__ModuleLoader__.load({
@@ -23,8 +23,7 @@ window.__ModuleLoader__.load({
 .mr_card:last-child{border-bottom:0;padding-top:24px}
 .mr_title{margin:0;font-size:14px;font-weight:500;line-height:20px}
 .mr_desc{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
-.mr_code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:24px;font-weight:500;letter-spacing:.2em;text-align:left;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);user-select:all;width:100%;box-sizing:border-box}
-.mr_code_empty{font-family:inherit;color:var(--dsw-alias-label-secondary);letter-spacing:0;font-size:13px;font-weight:400}
+.mr_input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:inherit;background:var(--dsw-alias-bg-layer-1);font:inherit}
 .mr_row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .mr_list{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
 .mr_item{display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:13px;padding:12px 0;border-bottom:.5px solid var(--dsw-alias-border-l1)}
@@ -40,7 +39,7 @@ window.__ModuleLoader__.load({
 
     /** 简单 fetch 包装：只处理 JSON 与错误码。 */
     async function call(path, init) {
-      const localPath = globalThis.location?.protocol === 'dsh-app:' ? 'http://127.0.0.1:3080' + path : path
+      const localPath = (globalThis.location?.protocol === 'dsh-app:' || /^http:\/\/127\.0\.0\.1:/.test(globalThis.location?.origin ?? '')) ? 'http://127.0.0.1:3080' + path : path
       const res = await fetch(localPath, {
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -60,18 +59,20 @@ window.__ModuleLoader__.load({
     }
 
     function RemoteSection() {
-      const [code, setCode] = react.useState(undefined)
-      const [expiresAt, setExpiresAt] = react.useState(0)
+      const [password, setPassword] = react.useState('')
+      const [confirmation, setConfirmation] = react.useState('')
+      const [passwordSet, setPasswordSet] = react.useState(false)
+      const [revokeDevices, setRevokeDevices] = react.useState(false)
       const [devices, setDevices] = react.useState([])
       const [error, setError] = react.useState(undefined)
       const [notice, setNotice] = react.useState(undefined)
       const [busy, setBusy] = react.useState(false)
-      const [remaining, setRemaining] = react.useState(0)
 
       const refresh = react.useCallback(async () => {
         try {
           const status = await call('/myremote/status', { method: 'GET' })
           setDevices(Array.isArray(status?.devices) ? status.devices : [])
+          setPasswordSet(status?.passwordSet === true)
         } catch (cause) {
           setError(String(cause?.message ?? cause))
         }
@@ -81,30 +82,18 @@ window.__ModuleLoader__.load({
         refresh()
       }, [refresh])
 
-      // 倒计时：配对码 60 秒过期，过期后从界面撤掉，避免显示一个没用的码。
-      react.useEffect(() => {
-        if (expiresAt === 0) return undefined
-        const tick = () => {
-          const left = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000))
-          setRemaining(left)
-          if (left === 0) { setCode(undefined); setExpiresAt(0) }
-        }
-        tick()
-        const timer = setInterval(tick, 1000)
-        return () => clearInterval(timer)
-      }, [expiresAt])
-
-      const mint = async () => {
-        setBusy(true); setError(undefined); setNotice(undefined)
+      const save = async () => {
+        setError(undefined); setNotice(undefined)
+        if (password.length === 0) { setError('请输入密码。'); return }
+        if (password !== confirmation) { setError('两次输入的密码不一致。'); return }
+        setBusy(true)
         try {
-          const value = await call('/myremote/code', { method: 'POST' })
-          setCode(value?.code)
-          setExpiresAt(Number(value?.expiresAt ?? 0))
-          setNotice('配对码已生成，60 秒内有效，只能用一次。')
+          await call('/myremote/password', { method: 'POST', body: JSON.stringify({ password, revokeDevices }) })
+          setPassword(''); setConfirmation(''); setRevokeDevices(false)
+          setNotice(revokeDevices ? '密码已保存，已断开全部设备。' : '密码已保存，已配对设备保持连接。')
+          await refresh()
         } catch (cause) {
-          setError(cause?.message === 'loopback-only'
-            ? '配对码只能在本机生成。请在这台电脑的浏览器里操作。'
-            : String(cause?.message ?? cause))
+          setError(cause?.message === 'loopback-only' ? '请在本机设置远程密码。' : cause?.message === 'password-save-failed' ? '密码保存失败，请重试。' : String(cause?.message ?? cause))
         } finally { setBusy(false) }
       }
 
@@ -112,7 +101,6 @@ window.__ModuleLoader__.load({
         setBusy(true); setError(undefined); setNotice(undefined)
         try {
           await call('/myremote/revoke', { method: 'POST' })
-          setCode(undefined); setExpiresAt(0)
           setNotice('已吊销全部设备，需要重新配对才能远程访问。')
           await refresh()
         } catch (cause) {
@@ -130,18 +118,14 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'mr_root' }, [
         h('style', { key: 'style' }, CSS),
         h('section', { className: 'mr_card', key: 'pair' }, [
-          h('h3', { className: 'mr_title', key: 't' }, '设备配对'),
-          h('p', { className: 'mr_desc', key: 'd' },
-            '在另一台设备打开 dsh.liuiyunpro.cn/myremote/，输入配对码即可连接。'),
-          h('div', {
-            className: 'mr_code' + (code === undefined ? ' mr_code_empty' : ''),
-            key: 'c',
-          }, code ?? '尚未生成配对码'),
-          code !== undefined
-            ? h('p', { className: 'mr_desc', key: 's' }, `剩余 ${String(remaining)} 秒`)
-            : null,
+          h('h3', { className: 'mr_title', key: 't' }, '远程密码'),
+          h('p', { className: 'mr_desc', key: 'd' }, '在另一台设备打开 dsh.liuiyunpro.cn/myremote/，输入此密码即可连接。密码区分大小写，支持 4 位密码，无最低长度和复杂度要求。'),
+          h('p', { className: 'mr_desc', key: 'status' }, passwordSet ? '已设置密码' : '未设置密码'),
+          h('label', { key: 'password' }, ['密码', h('input', { className: 'mr_input', type: 'password', autoComplete: 'new-password', value: password, disabled: busy, onChange: e => setPassword(e.target.value), key: 'input' })]),
+          h('label', { key: 'confirmation' }, ['确认密码', h('input', { className: 'mr_input', type: 'password', autoComplete: 'new-password', value: confirmation, disabled: busy, onChange: e => setConfirmation(e.target.value), key: 'input' })]),
+          h('label', { className: 'mr_row', key: 'revoke-option' }, [h('input', { type: 'checkbox', checked: revokeDevices, disabled: busy, onChange: e => setRevokeDevices(e.target.checked), key: 'checkbox' }), '同时断开全部已配对设备']),
           h('div', { className: 'mr_row', key: 'b' }, [
-            h(Button, { key: 'mint', onClick: mint, disabled: busy }, '生成配对码'),
+            h(Button, { key: 'save', onClick: save, disabled: busy }, passwordSet ? '修改密码' : '保存密码'),
           ]),
           notice !== undefined ? h('p', { className: 'mr_ok', key: 'n' }, notice) : null,
           error !== undefined ? h('p', { className: 'mr_err', key: 'e' }, error) : null,
