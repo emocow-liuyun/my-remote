@@ -51,7 +51,7 @@
     "cloudflare-tunnel"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test"
   },
   "devDependencies": {
     "@deepseek-ai/schemastery": "3.18.5"

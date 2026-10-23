@@ -17,12 +17,12 @@ async function freePort() {
 }
 function output(child) { let stderr = ''; child.stderr?.on('data', data => { stderr += data }); return () => stderr }
 
-for (const mode of ['SIGTERM', 'parent demise']) test(`Linux supervisor ${mode} force-kills native child ignoring TERM`, { skip: !linux, timeout: 12000 }, async () => {
+for (const mode of ['SIGTERM', 'absent parent']) test(`Linux supervisor ${mode} force-kills native child ignoring TERM`, { skip: !linux, timeout: 12000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'myremote native space '))
   const binary = join(dir, 'native tunnel')
   // POSIX shell is a real native executable; its busy loop has no grandchildren.
   writeFileSync(binary, '#!/bin/sh\ntrap "" TERM\necho "ready $$"\nwhile :; do :; done\n', { mode: 0o700 })
-  const child = spawn(process.execPath, [script('tunnel-runner.js'), binary], { env: { ...process.env, ...(mode === 'parent demise' ? { MYREMOTE_PARENT_PID: '2147483647' } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(process.execPath, [script('tunnel-runner.js'), binary], { env: { ...process.env, ...(mode === 'absent parent' ? { MYREMOTE_PARENT_PID: '2147483647' } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] })
   const errors = output(child)
   let pid
   try {
@@ -36,6 +36,32 @@ for (const mode of ['SIGTERM', 'parent demise']) test(`Linux supervisor ${mode} 
     if (pid && isProcessAlive(pid)) process.kill(pid, 'SIGKILL')
     if (child.exitCode === null) child.kill('SIGKILL')
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('Linux actual parent demise cleans up supervisor and native process', { skip: !linux, timeout: 12000 }, async () => {
+  const code = `const {spawn}=require('node:child_process');const child=spawn(process.execPath,${JSON.stringify([script('tunnel-runner.js'), '/bin/sh', '-c', 'trap "" TERM; echo native=$$; while :; do :; done'])},{stdio:'inherit',env:{...process.env,MYREMOTE_PARENT_PID:String(process.pid)}});console.log('supervisor='+child.pid);setInterval(()=>{},1000)`
+  const parent = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'pipe'] })
+  output(parent)
+  let text = ''; let native; let supervisor
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('native startup timed out')), 4000)
+      parent.stdout.on('data', data => {
+        text += data
+        native = Number(text.match(/native=(\d+)/)?.[1]); supervisor = Number(text.match(/supervisor=(\d+)/)?.[1])
+        if (native && supervisor) { clearTimeout(timer); resolve() }
+      })
+    })
+    const gone = once(parent, 'exit'); parent.kill('SIGKILL'); await gone
+    const deadline = Date.now() + 7000
+    // The supervisor reaps its native child before exiting; allow parent detection + TERM deadline.
+    while (isProcessAlive(native) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+    assert.equal(isProcessAlive(native), false, 'native child survived its actual parent demise')
+  } finally {
+    if (native && isProcessAlive(native)) process.kill(native, 'SIGKILL')
+    if (supervisor && isProcessAlive(supervisor)) process.kill(supervisor, 'SIGKILL')
+    if (parent.exitCode === null && parent.signalCode === null) parent.kill('SIGKILL')
   }
 })
 
