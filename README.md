@@ -150,3 +150,46 @@ GitHub Actions 矩阵：Ubuntu / Windows × Node 20 / 22 / 24。测试使用临�
 ## 许可
 
 MIT。基于 https://github.com/emocow-liuyun/my-remote 。
+
+## 国内中转（可选，替代 Cloudflare）
+
+Cloudflare 边缘在境外，国内访问每次请求要多一次跨境往返。用自有国内服务器做 SSH 反向隧道可以显著降低延迟。
+
+实测（同一台家宽，同一页面）：
+
+| 线路 | 首字节 | 说明 |
+|---|---|---|
+| Cloudflare 隧道 | ~700–870ms | 出境到边缘再回源 |
+| 国内中转 | **~145ms** | 直连国内服务器 |
+
+浏览器完整链路：文档 988ms、历史会话 3.2 秒可见、进入会话 6.5 秒，0 个 JS 报错。
+
+配置：
+
+```yaml
+- id: my-remote
+  name: "@local/my-remote"
+  config:
+    remoteEntry:
+      enabled: true
+      port: 3080
+    tunnel:
+      enabled: false          # 关掉 Cloudflare
+    relay:
+      enabled: true
+      host: 你的服务器IP
+      port: 22
+      user: root
+      remotePort: 3081        # 服务器上只绑 127.0.0.1
+      identityFile: /home/you/.ssh/myremote_relay
+```
+
+服务器侧需要：
+
+1. 公钥写进 `~/.ssh/authorized_keys`（免密）
+2. 反向代理把某个公网端口转发到 `127.0.0.1:3081`，并透传 WebSocket
+3. 安全组放行该公网端口
+
+数据路径：手机 → 服务器:公网端口 → 服务器 127.0.0.1:3081 → SSH 隧道 → 本机 3080 → 门控 → 桌面实例。
+
+**注意**：`remotePort` 只绑服务器回环，不会被公网直接访问；公网入口必须由你的反向代理控制，可叠加 TLS 和额外鉴权。
